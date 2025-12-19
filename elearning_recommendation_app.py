@@ -112,6 +112,83 @@ class QLearningAgent:
         return self.training_history
 
 # ========================
+# Fungsi Preprocessing & CLT
+# ========================
+@st.cache_data
+def load_and_preprocess_data(file_path):
+    df = pd.read_csv(file_path)
+    le = LabelEncoder()
+    for col in ['gender', 'parent_education', 'internet_access', 'lunch_type', 'extra_activities', 'final_result']:
+        df[f'{col}_encoded'] = le.fit_transform(df[col])
+    
+    df['avg_score'] = (df['math_score'] + df['reading_score'] + df['writing_score']) / 3
+    
+    # Kategori Performa
+    df['performance_category'] = pd.cut(df['avg_score'], bins=[0, 60, 75, 90, 100], labels=['Low', 'Medium', 'High', 'Excellent'])
+    
+    # Kategori Aksi (Study Intensity)
+    df['study_hours_category'] = pd.cut(df['study_hours'], bins=[0, 2, 3.5, 5], labels=['Low', 'Medium', 'High'])
+    
+    return df
+
+def prepare_rl_data_with_clt(df):
+    """
+    Menyiapkan data RL dengan integrasi Cognitive Load Theory (CLT)
+    """
+    # 1. Menghitung Cognitive Load Index (CLT Index)
+    # Rumus simulasi: Jam belajar tinggi vs Skor rendah mengindikasikan beban ekstrinsik tinggi
+    df['cognitive_load_index'] = (df['study_hours'] * 10) / (df['avg_score'] + 1)
+    
+    # 2. Kategorisasi CLT State
+    df['clt_state_label'] = pd.cut(df['cognitive_load_index'], 
+                                   bins=[0, 0.5, 1.5, 3.0, 100], 
+                                   labels=['Optimal', 'Moderate', 'High', 'Overload'])
+    df['clt_state'] = df['clt_state_label'].cat.codes
+    
+    # 3. Gabungan State (Performance + CLT)
+    # Ini membuat agen RL sadar akan performa akademik DAN beban mental siswa
+    df['state'] = df['performance_category'].cat.codes + df['clt_state']
+    
+    # 4. Action & Next State
+    df['action'] = df['study_hours_category'].cat.codes
+    df['next_state'] = df['state'].shift(-1).fillna(df['state'].iloc[-1]).astype(int)
+    
+    # 5. Reward Function Sensitif CLT
+    # Reward (+) untuk kelulusan, Penalti (-) jika Cognitive Load Overload (> 3.0)
+    def calculate_reward(row):
+        reward = row['final_result_encoded'] * 10
+        if row['clt_state_label'] == 'Overload':
+            reward -= 7  # Penalti beban kognitif berlebih
+        return reward
+    
+    df['reward'] = df.apply(calculate_reward, axis=1)
+    return df
+
+# ========================
+# Logika Rekomendasi Adaptif
+# ========================
+def get_adaptive_recommendations(performance, clt_index):
+    """
+    Memberikan rekomendasi berdasarkan kacamata CLT dan Performa
+    """
+    # Jika Cognitive Load Overload, kurangi kompleksitas (Beban Ekstrinsik)
+    if clt_index > 3.0:
+        return [
+            "⚡ Micro-learning (Video < 5 menit)",
+            "📋 Infografis Ringkasan Poin Utama",
+            "💡 Latihan Soal dengan Bantuan (Scaffolding)",
+            "🎧 Audio Recap untuk Mengurangi Beban Visual"
+        ]
+    
+    # Jika Beban Optimal dan Performa Bagus, berikan tantangan (Beban Germane)
+    materials = {
+        'Low': ["Materi Dasar Step-by-Step", "Interactive Quiz Dasar", "Video Animasi Konsep"],
+        'Medium': ["Modul Pembelajaran Menengah", "Latihan Soal Variatif", "Forum Diskusi Terbimbing"],
+        'High': ["Studi Kasus Nyata", "Eksperimen Mandiri", "Materi Pengayaan Lanjut"],
+        'Excellent': ["Proyek Riset Kecil", "Analisis Jurnal Ilmiah", "Olimpiade Challenge"]
+    }
+    return materials.get(performance, ["Materi Umum"])
+# ========================
 # Fungsi Preprocessing Data
 # ========================
 @st.cache_data
